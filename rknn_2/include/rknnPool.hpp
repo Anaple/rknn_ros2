@@ -12,6 +12,8 @@
 #include "opencv2/core/core.hpp"
 #include "opencv2/imgcodecs.hpp"
 #include "opencv2/imgproc.hpp"
+#include <sensor_msgs/msg/image.hpp>
+#include <msg_interfaces/msg/rgb_camera_obstacle.hpp>
 #include "ThreadPool.hpp"
 using cv::Mat;
 using std::queue;
@@ -37,7 +39,8 @@ private:
 
 public:
     Mat ori_img;
-    detect_result_group_t result;
+    sensor_msgs::msg::Image::SharedPtr depth_image_msg_ptr;
+    msg_interfaces::msg::RGBCameraObstacle::SharedPtr rgb_frames_data;
     int interf();
     rknn_lite(char *dst, int n);
     ~rknn_lite();
@@ -218,27 +221,30 @@ int rknn_lite::interf()
     }
     post_process((int8_t *)outputs[0].buf, (int8_t *)outputs[1].buf, (int8_t *)outputs[2].buf, height, width,
                  box_conf_threshold, nms_threshold, scale_w, scale_h, out_zps, out_scales, &detect_result_group);
-    result = detect_result_group;
+
     // Draw Objects
     char text[256];
     for (int i = 0; i < detect_result_group.count; i++)
     {
         detect_result_t *det_result = &(detect_result_group.results[i]);
-        
-        
-
-        sprintf(text, "%s %.1f%%", det_result->name, det_result->prop * 100);
         int x1 = det_result->box.left;
         int y1 = det_result->box.top;
         int x2 = det_result->box.right;
         int y2 = det_result->box.bottom;
-
+        double deep = depthImageRecv(depth_image_msg_ptr, y1, y2, x1, x2);
         int w = x2 - x1;
         int h = y2 - y1;
-        
-
+        sprintf(text, "%s %.1f%%  deepth: %.1f m", det_result->name, det_result->prop * 100, deep / 1000);
+        putText(ori_img, text, cv::Point(x1, y1 + 12), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255));
         rectangle(ori_img, cv::Point(x1, y1), cv::Point(det_result->box.right, det_result->box.bottom), cv::Scalar(0, 0, 255, 0), 3);
-        
+        // ROS output
+        rgb_frames_data.obstacle_type.push_back(det_result->name);
+        rgb_frames_data.obstacle_position.push_back(x1);
+        rgb_frames_data.obstacle_position.push_back(y1);
+        rgb_frames_data.obstacle_position.push_back(x2);
+        rgb_frames_data.obstacle_position.push_back(y2);
+        // 640 to 1280
+        rgb_frames_data.obstacle_size.push_back(deep)
     }
     ret = rknn_outputs_release(rkModel, io_num.n_output, outputs);
     if (resize_buf)
@@ -246,6 +252,40 @@ int rknn_lite::interf()
         free(resize_buf);
     }
     return 0;
+}
+
+float findMode(const std::map<float, int> &depth_counts)
+{
+    // 找到映射中出现次数最多的深度值
+    auto mode_iterator = std::max_element(
+        depth_counts.begin(), depth_counts.end(),
+        [](const auto &a, const auto &b)
+        { return a.second < b.second; });
+    // 返回众数深度值
+    return mode_iterator->first;
+}
+
+float depthImageRecv(const sensor_msgs::msg::Image::SharedPtr depth_image_msg, int top, int bottom, int left, int right)
+{
+    std::map<float, int> depth_counts;
+
+    for (int y = top; y <= bottom; ++y)
+    {
+        for (int x = left; x <= right; ++x)
+        {
+            // 获取深度值
+            float depth = getDepthAtPixel(depth_image_msg, x, y);
+
+            if (depth > 0)
+            {
+                // 将深度值添加到映射中
+                depth_counts[depth]++;
+            }
+        }
+    }
+
+    float mode_depth = findMode(depth_counts);
+    return mode_depth;
 }
 
 static unsigned char *load_data(FILE *fp, size_t ofst, size_t sz)
