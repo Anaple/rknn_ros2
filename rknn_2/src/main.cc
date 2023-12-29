@@ -40,6 +40,7 @@
 #include "ThreadPool.hpp"
 #include "postprocess.h"
 #include <msg_interfaces/msg/rgb_camera_obstacle.hpp>
+#define MODEL_PATH "install/rknn_2/share/rknn_2/model/RK3588/yolov5s-640-640.rknn"
 
 using std::queue;
 using std::time;
@@ -53,22 +54,20 @@ public:
   {
     // 订阅 /color/raw 话题，回调函数为 processImage
     subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
-        "/camera/color/image_raw", 10, std::bind(&ImageSubscriberNode::imageCallback, this, std::placeholders::_1));
-    image_publisher_ = create_publisher<sensor_msgs::msg::Image>("image_topic", 10);
-    rgb_obstacle_publisher_ = create_publisher<msg_interfaces::msg::RGBCameraObstacle>("rgb_camera/obstacle", 10);
+        "/camera/color/image_raw", rclcpp::QoS(5).best_effort(), std::bind(&ImageSubscriberNode::imageCallback, this, std::placeholders::_1));
+    image_publisher_ = create_publisher<sensor_msgs::msg::Image>("image_topic", rclcpp::QoS(1).best_effort());
+    rgb_obstacle_publisher_ = create_publisher<msg_interfaces::msg::RGBCameraObstacle>("rgb_camera/obstacle", rclcpp::QoS(5).best_effort());
 
     // 订阅深度图像和相机信息
     depth_image_subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
-        "/camera/depth/image_rect_raw", 10,
+        "/camera/depth/image_rect_raw", rclcpp::QoS(5).best_effort(),
         std::bind(&ImageSubscriberNode::depthImageCallback, this, std::placeholders::_1));
 
     camera_info_subscription_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
         "/camera/depth/camera_info", 10,
         std::bind(&ImageSubscriberNode::cameraInfoCallback, this, std::placeholders::_1));
-
-    model_name = "install/rknn_2/share/rknn_2/model/RK3588/yolov5s-640-640.rknn"; // 参数二，模型所在路径
     // Create a MultiThreadedExecutor with the specified number of threads
-    printf("模型名称:\t%s\n", model_name);
+    printf("模型名称:\t%s\n", MODEL_PATH);
   }
 
 private:
@@ -81,7 +80,7 @@ private:
       // Process the image (e.g., perform inference)
       processImage(cv_ptr->image);
     }
-    catch (const cv::Exception &e)
+    catch (const std::exception &e)
     {
       RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
     }
@@ -89,40 +88,53 @@ private:
 
   void processImage(const cv::Mat &image)
   {
-    // Perform your image processing here using RKNN or other methods
-    // ...
-    initRkPool(image);
-    if (count > n)
+    try
     {
-      // 发布帧
-      futs.front().get();
-      futs.pop();
-      cv::Mat cvImage = rkpool[frames % n]->ori_img;
-      sensor_msgs::msg::Image::SharedPtr rosImage = std::make_shared<sensor_msgs::msg::Image>();
-      cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", cvImage).toImageMsg(*rosImage);
-      rgb_obstacle_publisher_->publish(rkpool[frames % n]->rgb_frames_data);
-      image_publisher_->publish(*rosImage);
-      // 更新帧
-      rkpool[frames % n]->ori_img = cv::Mat(image);
-      rkpool[frames % n]->depth_image_msg_ptr = depth_image_msg_gb;
-      msg_interfaces::msg::RGBCameraObstacle::SharedPtr new_rgb = std::make_shared<msg_interfaces::msg::RGBCameraObstacle>();
-      rkpool[frames % n]->rgb_frames_data = new_rgb;
-      futs.push(tdpool.submit(&rknn_lite::interf, &(*rkpool[frames++ % n])));
+      mat_ptr = cv::Mat(image);
+      initRkPool();
+      if (count > n)
+      {
+        // 发布帧
+        futs.front().get();
+        futs.pop();
+        cv::Mat cvImage = rkpool[frames % n]->ori_img;
+        sensor_msgs::msg::Image::SharedPtr rosImage = std::make_shared<sensor_msgs::msg::Image>();
+        cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", cvImage).toImageMsg(*rosImage);
+        rgb_obstacle_publisher_->publish(rkpool[frames % n]->rgb_frames_data);
+        image_publisher_->publish(*rosImage);
+        // 更新帧
+        rkpool[frames % n]->ori_img = cv::Mat(mat_ptr);
+        sensor_msgs::msg::Image depth_image_copy;
+        depth_image_copy.height = depth_image_msg_gb->height;
+        depth_image_copy.width = depth_image_msg_gb->width;
+        depth_image_copy.data = depth_image_msg_gb->data;
+
+        // Assign the copied object to depth_image_msg_ptr
+        rkpool[frames % n]->depth_image_msg_ptr = depth_image_copy;
+        msg_interfaces::msg::RGBCameraObstacle clean;
+        rkpool[frames % n]->rgb_frames_data = clean;
+        futs.push(tdpool.submit(&rknn_lite::interf, &(*rkpool[frames++ % n])));
+      }
+      else
+      {
+        count++;
+      }
+    }
+    catch (const std::exception &e)
+    {
+      RCLCPP_ERROR(this->get_logger(), "yolo exception: %s", e.what());
     }
   }
 
-  void initRkPool(const cv::Mat &image)
+  void initRkPool()
   {
     if (count < n)
-    {
-      auto rknn_model = std::make_shared<rknn_lite>(model_name, count % 3);
+    { 
+      char* model_path_char = MODEL_PATH;
+      auto rknn_model = std::make_shared<rknn_lite>(model_path_char, count % 3);
       rkpool.push_back(rknn_model);
-      rknn_model->ori_img = cv::Mat(image); // Assuming mat_ptr is available
-      rkpool[frames % n]->depth_image_msg_ptr = depth_image_msg_gb;
-      msg_interfaces::msg::RGBCameraObstacle new_rgb;
-      rkpool[frames % n]->rgb_frames_data = new_rgb;
+      rknn_model->ori_img = cv::Mat(mat_ptr); // Assuming mat_ptr is available
       futs.push(tdpool.submit(&rknn_lite::interf, rknn_model.get()));
-      count++;
     }
   }
   void depthImageCallback(const sensor_msgs::msg::Image::SharedPtr depth_image_msg)
@@ -137,25 +149,7 @@ private:
     // 这里假设你已经实现了获取相机内参矩阵的函数 getCameraMatrix(camera_info_msg)，
     // 具体实现方式可以参考 sensor_msgs::msg::CameraInfo 文档。
   }
-
-  float getDepthAtPixel(const sensor_msgs::msg::Image::SharedPtr depth_image_msg, int x, int y)
-  {
-    // 获取深度图像的宽度和高度
-    int width = depth_image_msg->width;
-    int height = depth_image_msg->height;
-
-    // 假设深度图像数据类型是单通道16位无符号整数，单位是毫米
-    uint16_t *depth_data = reinterpret_cast<uint16_t *>(&depth_image_msg->data[0]);
-
-    // 计算深度图像中的索引
-    int index = y * width + x;
-
-    // 获取深度值
-    uint16_t depth_value = depth_data[index];
-
-    return static_cast<float>(depth_value);
-  }
-
+  cv::Mat mat_ptr;
   cv_bridge::CvImageConstPtr cv_ptr;
   sensor_msgs::msg::Image::SharedPtr depth_image_msg_gb;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
@@ -163,11 +157,8 @@ private:
   rclcpp::Publisher<msg_interfaces::msg::RGBCameraObstacle>::SharedPtr rgb_obstacle_publisher_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr depth_image_subscription_;
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_subscription_;
-
-  char *model_name = NULL;
   int n = 6, frames = 0; // 设置线程数
   int count = 0;
-
   std::vector<std::shared_ptr<rknn_lite>> rkpool;
   std::queue<std::future<int>> futs;
   dpool::ThreadPool tdpool;

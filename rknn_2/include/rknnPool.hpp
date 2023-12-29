@@ -36,15 +36,91 @@ private:
     int channel = 3;
     int width = 0;
     int height = 0;
+    float findMode(const std::map<float, int> &depth_counts);
+    float depthImageRecv(const sensor_msgs::msg::Image &depth_image_msg, int top, int bottom, int left, int right);
+    float getDepthAtPixel(const sensor_msgs::msg::Image &depth_image_msg, int x, int y);
 
 public:
     Mat ori_img;
-    sensor_msgs::msg::Image::SharedPtr depth_image_msg_ptr;
-    msg_interfaces::msg::RGBCameraObstacle::SharedPtr rgb_frames_data;
+    sensor_msgs::msg::Image depth_image_msg_ptr;
+    msg_interfaces::msg::RGBCameraObstacle rgb_frames_data;
     int interf();
     rknn_lite(char *dst, int n);
     ~rknn_lite();
 };
+float rknn_lite::findMode(const std::map<float, int> &depth_counts)
+{
+    // 找到映射中出现次数最多的深度值
+    auto mode_iterator = std::max_element(
+        depth_counts.begin(), depth_counts.end(),
+        [](const auto &a, const auto &b)
+        { return a.second < b.second; });
+    // 返回众数深度值
+    return mode_iterator->first;
+}
+
+float rknn_lite::getDepthAtPixel(const sensor_msgs::msg::Image &depth_image_msg, int x, int y)
+{
+    try
+    {
+        // 获取深度图像的宽度和高度
+        int width = depth_image_msg.width;
+        int height = depth_image_msg.height;
+
+        // 检查像素位置是否在图像范围内
+        if (x < 0 || x >= width || y < 0 || y >= height)
+        {
+            // 处理越界情况，这里可以抛出异常或返回默认值
+            return 0.0f; // 默认深度值为0.0
+        }
+
+        // 假设深度图像数据类型是单通道16位无符号整数，单位是毫米
+        const uint16_t *depth_data = reinterpret_cast<const uint16_t *>(depth_image_msg.data.data());
+
+        // 计算深度图像中的索引
+        int index = y * width + x;
+
+        // 检查数组长度是否足够
+        if (index >= depth_image_msg.data.size() / sizeof(uint16_t))
+        {
+            // 处理数组越界情况，这里可以抛出异常或返回默认值
+            return 0.0f; // 默认深度值为0.0
+        }
+
+        // 获取深度值
+        uint16_t depth_value = depth_data[index];
+
+        // 将深度值转换为浮点数并返回
+        return static_cast<float>(depth_value);
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << e.what() << '\n';
+    }
+}
+
+float rknn_lite::depthImageRecv(const sensor_msgs::msg::Image &depth_image_msg, int top, int bottom, int left, int right)
+{
+    std::map<float, int> depth_counts;
+
+    for (int y = top; y <= bottom; ++y)
+    {
+        for (int x = left; x <= right; ++x)
+        {
+            // 获取深度值
+            float depth = getDepthAtPixel(depth_image_msg, x, y);
+
+            if (depth > 0)
+            {
+                // 将深度值添加到映射中
+                depth_counts[depth]++;
+            }
+        }
+    }
+
+    float mode_depth = findMode(depth_counts);
+    return mode_depth;
+}
 
 rknn_lite::rknn_lite(char *model_name, int n)
 {
@@ -232,9 +308,10 @@ int rknn_lite::interf()
         int x2 = det_result->box.right;
         int y2 = det_result->box.bottom;
         double deep = depthImageRecv(depth_image_msg_ptr, y1, y2, x1, x2);
+        ;
         int w = x2 - x1;
         int h = y2 - y1;
-        sprintf(text, "%s %.1f%%  deepth: %.1f m", det_result->name, det_result->prop * 100, deep / 1000);
+        sprintf(text, "%s %.1f%% depth: %.1f", det_result->name, det_result->prop * 100, deep / 1000);
         putText(ori_img, text, cv::Point(x1, y1 + 12), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255));
         rectangle(ori_img, cv::Point(x1, y1), cv::Point(det_result->box.right, det_result->box.bottom), cv::Scalar(0, 0, 255, 0), 3);
         // ROS output
@@ -244,7 +321,7 @@ int rknn_lite::interf()
         rgb_frames_data.obstacle_position.push_back(x2);
         rgb_frames_data.obstacle_position.push_back(y2);
         // 640 to 1280
-        rgb_frames_data.obstacle_size.push_back(deep)
+        rgb_frames_data.obstacle_size.push_back(deep);
     }
     ret = rknn_outputs_release(rkModel, io_num.n_output, outputs);
     if (resize_buf)
@@ -252,40 +329,6 @@ int rknn_lite::interf()
         free(resize_buf);
     }
     return 0;
-}
-
-float findMode(const std::map<float, int> &depth_counts)
-{
-    // 找到映射中出现次数最多的深度值
-    auto mode_iterator = std::max_element(
-        depth_counts.begin(), depth_counts.end(),
-        [](const auto &a, const auto &b)
-        { return a.second < b.second; });
-    // 返回众数深度值
-    return mode_iterator->first;
-}
-
-float depthImageRecv(const sensor_msgs::msg::Image::SharedPtr depth_image_msg, int top, int bottom, int left, int right)
-{
-    std::map<float, int> depth_counts;
-
-    for (int y = top; y <= bottom; ++y)
-    {
-        for (int x = left; x <= right; ++x)
-        {
-            // 获取深度值
-            float depth = getDepthAtPixel(depth_image_msg, x, y);
-
-            if (depth > 0)
-            {
-                // 将深度值添加到映射中
-                depth_counts[depth]++;
-            }
-        }
-    }
-
-    float mode_depth = findMode(depth_counts);
-    return mode_depth;
 }
 
 static unsigned char *load_data(FILE *fp, size_t ofst, size_t sz)
