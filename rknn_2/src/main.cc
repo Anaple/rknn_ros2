@@ -40,7 +40,7 @@
 #include "ThreadPool.hpp"
 #include "postprocess.h"
 #include <msg_interfaces/msg/rgb_camera_obstacle.hpp>
-#define MODEL_PATH "install/rknn_2/share/rknn_2/model/RK3588/yolov5s-640-640.rknn"
+#define MODEL_PATH "/home/ums/yolov5_md/model/RK3588/yolov5s.rknn"
 
 using std::queue;
 using std::time;
@@ -85,7 +85,6 @@ private:
       RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
     }
   }
-
   void processImage(const cv::Mat &image)
   {
     try
@@ -98,6 +97,7 @@ private:
         futs.front().get();
         futs.pop();
         cv::Mat cvImage = rkpool[frames % n]->ori_img;
+        // cv::imshow("Camera FPS", cvImage);
         sensor_msgs::msg::Image::SharedPtr rosImage = std::make_shared<sensor_msgs::msg::Image>();
         cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", cvImage).toImageMsg(*rosImage);
         rgb_obstacle_publisher_->publish(rkpool[frames % n]->rgb_frames_data);

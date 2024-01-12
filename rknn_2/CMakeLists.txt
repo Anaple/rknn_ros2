@@ -5,6 +5,18 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 
 endif()
 
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+  message(STATUS "Debug build - Disabling compiler optimizations")
+  add_compile_options(-O0)
+endif()
+
+# 在Debug模式下禁用编译器优化
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  message(STATUS "Debug build - Disabling compiler optimizations")
+  add_compile_options(-O0)
+endif()
+
 # rknn api
 set(RKNN_API_PATH ${CMAKE_SOURCE_DIR}/../../runtime/RK3588/${CMAKE_SYSTEM_NAME}/librknn_api)
 set(LIB_ARCH aarch64)
