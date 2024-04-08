@@ -1,21 +1,20 @@
-cmake_minimum_required(VERSION 3.8)
-project(rknn_2)
+cmake_minimum_required(VERSION 3.4.1)
 
-if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+project(rknn_ros2)
 
-endif()
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_FLAGS "-pthread")
 
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Release)
-  message(STATUS "Debug build - Disabling compiler optimizations")
-  add_compile_options(-O0)
-endif()
+# skip 3rd-party lib dependencies
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--allow-shlib-undefined")
 
-# 在Debug模式下禁用编译器优化
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  message(STATUS "Debug build - Disabling compiler optimizations")
-  add_compile_options(-O0)
-endif()
+# # install target and libraries
+# set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR}/install/rknn_ros2_${CMAKE_SYSTEM_NAME})
+
+# set(CMAKE_SKIP_INSTALL_RPATH FALSE)
+# set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+# set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
 
 # rknn api
 set(RKNN_API_PATH ${CMAKE_SOURCE_DIR}/../../runtime/RK3588/${CMAKE_SYSTEM_NAME}/librknn_api)
@@ -31,19 +30,18 @@ include_directories(${RKNN_API_PATH}/include)
 include_directories(${CMAKE_SOURCE_DIR}/include/3rdparty)
 include_directories(${RGA_PATH}/include)
 
+# opencv
+
+
 # find dependencies
 find_package(ament_cmake REQUIRED)
-find_package(OpenCV REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(OpenCV REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(msg_interfaces REQUIRED)
 
-
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
+set(CMAKE_INSTALL_RPATH "lib")
 
 
 if(BUILD_TESTING)
@@ -59,32 +57,34 @@ if(BUILD_TESTING)
 endif()
 
 
-
+# rknn_yolov5_demo
 include_directories( ${CMAKE_SOURCE_DIR}/include)
-add_executable(rknn_2
+
+add_executable(rknn_ros2
         src/main.cc
         src/postprocess.cc
-
+        src/preprocess.cc
+        src/rkYolov5s.cc
 )
-target_link_libraries(rknn_2
+
+target_link_libraries(rknn_ros2
   ${RKNN_RT_LIB}
   ${OpenCV_LIBS}
   ${RGA_LIB}
 )
-ament_target_dependencies(rknn_2 rclcpp std_msgs OpenCV sensor_msgs cv_bridge msg_interfaces)
 
-install(TARGETS rknn_2
+ament_target_dependencies(rknn_ros2 rclcpp std_msgs OpenCV sensor_msgs cv_bridge)
+
+
+
+install(TARGETS rknn_ros2
   DESTINATION lib/${PROJECT_NAME}
 )
 install(PROGRAMS ${RKNN_RT_LIB} DESTINATION lib)
 install(PROGRAMS ${RGA_LIB} DESTINATION lib)
 install(DIRECTORY model DESTINATION share/${PROJECT_NAME})
 
-set_target_properties(rknn_2 PROPERTIES
+set_target_properties(rknn_ros2 PROPERTIES
   INSTALL_RPATH_USE_LINK_PATH TRUE
 )
-ament_package(
-)
-
-
-
+ament_package()
